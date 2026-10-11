@@ -1,0 +1,80 @@
+name: Build OSRM Florida Graph
+
+# Standalone, generic OSRM graph build. No proprietary code, no secrets,
+# no private-repo content -- this workflow only ever touches public OSM
+# data and the official osrm/osrm-backend Docker image. Manual trigger
+# only; runs on the standard (free) GitHub-hosted Ubuntu runner for
+# public repositories.
+#
+# Publishes the finished .osrm graph files as a GitHub Release asset
+# (not just a workflow artifact) so the result persists indefinitely and
+# has no practical size ceiling for download -- the consuming side
+# downloads the release asset, verifies SHA256SUMS.txt, and transfers
+# only those files to wherever osrm-routed actually runs.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write   # needed to create the Release + upload assets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Florida OSM extract (Geofabrik, public data)
+        run: |
+          mkdir -p data
+          curl -fL --progress-bar \
+            -o data/florida-latest.osm.pbf \
+            https://download.geofabrik.de/north-america/us/florida-latest.osm.pbf
+          ls -lh data/
+
+      - name: osrm-extract
+        run: |
+          docker run --rm -t -v "${{ github.workspace }}/data:/data" \
+            osrm/osrm-backend osrm-extract -p /opt/car.lua /data/florida-latest.osm.pbf
+
+      - name: osrm-partition
+        run: |
+          docker run --rm -t -v "${{ github.workspace }}/data:/data" \
+            osrm/osrm-backend osrm-partition /data/florida-latest.osrm
+
+      - name: osrm-customize
+        run: |
+          docker run --rm -t -v "${{ github.workspace }}/data:/data" \
+            osrm/osrm-backend osrm-customize /data/florida-latest.osrm
+
+      - name: Checksum the built graph files
+        id: checksum
+        run: |
+          cd data
+          rm -f florida-latest.osm.pbf
+          sha256sum florida-latest.osrm* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          du -sh .
+          TAG="osrm-florida-${{ github.run_id }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Package graph files
+        run: |
+          cd data
+          tar -czf ../osrm-florida-graph.tar.gz florida-latest.osrm* SHA256SUMS.txt
+          cd ..
+          ls -lh osrm-florida-graph.tar.gz
+
+      - name: Publish as a GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.checksum.outputs.tag }}
+          name: "OSRM Florida graph (run ${{ github.run_id }})"
+          body: |
+            Built from the Geofabrik Florida extract on ${{ github.run_id }}.
+            `osrm-florida-graph.tar.gz` contains the finished `.osrm` graph
+            files plus `SHA256SUMS.txt` for integrity verification.
+          files: osrm-florida-graph.tar.gz
+          draft: false
+          prerelease: false
