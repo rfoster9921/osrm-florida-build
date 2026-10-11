@@ -34,18 +34,23 @@ jobs:
           ls -lh data/
 
       - name: osrm-extract
+        # --user matches the runner's own uid/gid so the files osrm-extract
+        # produces are owned by the runner user, not root -- otherwise the
+        # later checksum step (running as the plain runner user, not via
+        # Docker) can't even read them. Reproduced live: "sha256sum:
+        # florida-latest.osrm.fileIndex: Permission denied".
         run: |
-          docker run --rm -t -v "${{ github.workspace }}/data:/data" \
+          docker run --rm -t --user "$(id -u):$(id -g)" -v "${{ github.workspace }}/data:/data" \
             osrm/osrm-backend osrm-extract -p /opt/car.lua /data/florida-latest.osm.pbf
 
       - name: osrm-partition
         run: |
-          docker run --rm -t -v "${{ github.workspace }}/data:/data" \
+          docker run --rm -t --user "$(id -u):$(id -g)" -v "${{ github.workspace }}/data:/data" \
             osrm/osrm-backend osrm-partition /data/florida-latest.osrm
 
       - name: osrm-customize
         run: |
-          docker run --rm -t -v "${{ github.workspace }}/data:/data" \
+          docker run --rm -t --user "$(id -u):$(id -g)" -v "${{ github.workspace }}/data:/data" \
             osrm/osrm-backend osrm-customize /data/florida-latest.osrm
 
       - name: Checksum the built graph files
